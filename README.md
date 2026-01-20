@@ -4,20 +4,24 @@ A production-ready, multi-tenant SaaS backend for Beauty Parlour & Barber Shop M
 
 ## 🏗️ Architecture
 
-### Multi-Tenant Architecture
-- **Single MongoDB cluster** with tenant-based data isolation
-- **Tenant ID (clientId)** on every model for logical data separation
-- **Multi-shop support**: One client (shop owner) can manage multiple shops
+### Database-Per-Tenant Architecture
+- **Single MongoDB cluster** with **multiple databases** for true data isolation
+- **Platform Database (`platform_db`)**: Stores platform super admin and client admin metadata
+- **Client Databases**: Each client gets a unique database (e.g., `client_64fa2c9e_db`)
+- **Database Isolation**: Complete data separation - no tenantId filtering needed
+- **Multi-shop support**: One client (shop owner) can manage multiple shops within their database
 - **Independent operations**: Each shop has independent staff, slots, bookings, and invoices
 
 ### Key Features
-- ✅ Multi-tenant data isolation
+- ✅ True multi-database SaaS architecture
+- ✅ Database-per-tenant with automatic database creation
+- ✅ Complete data isolation per client
 - ✅ Multi-shop management per client
 - ✅ Dynamic slot generation based on staff count
 - ✅ Real-time slot updates via Socket.IO
 - ✅ Auto no-show handling via cron jobs
 - ✅ Role-based access control (RBAC)
-- ✅ JWT authentication
+- ✅ JWT authentication with database context
 - ✅ Online and walk-in booking support
 - ✅ Price editing with audit trail
 - ✅ Automatic invoice generation
@@ -34,7 +38,7 @@ A production-ready, multi-tenant SaaS backend for Beauty Parlour & Barber Shop M
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd bookacut
+   cd bookacut_backend
    ```
 
 2. **Install dependencies**
@@ -59,7 +63,12 @@ A production-ready, multi-tenant SaaS backend for Beauty Parlour & Barber Shop M
 4. **Start MongoDB**
    Make sure MongoDB is running on your system.
 
-5. **Start the server**
+5. **Run seed script** (Creates platform super admin)
+   ```bash
+   npm run seed
+   ```
+
+6. **Start the server**
    ```bash
    # Development mode (with nodemon)
    npm run dev
@@ -68,7 +77,7 @@ A production-ready, multi-tenant SaaS backend for Beauty Parlour & Barber Shop M
    npm start
    ```
 
-6. **Verify installation**
+7. **Verify installation**
    ```bash
    curl http://localhost:3000/health
    ```
@@ -77,50 +86,62 @@ A production-ready, multi-tenant SaaS backend for Beauty Parlour & Barber Shop M
 
 ```
 src/
+ ├── database/         # Database connection management
+ │   ├── connectionManager.js  # Multi-database connection manager
+ │   └── modelFactory.js       # Dynamic model loader per database
+ ├── platform/         # Platform database models
+ │   └── models/
+ │       ├── PlatformAdmin.js      # Platform super admin users
+ │       ├── ClientAdmin.js        # Client admin metadata
+ │       └── ClientDatabaseMap.js  # Client ID to database mapping
+ ├── client/           # Client database models
+ │   └── models/
+ │       ├── User.js          # Client users (admin, staff, customers)
+ │       ├── Shop.js          # Shops
+ │       ├── Service.js       # Services
+ │       ├── Booking.js       # Bookings
+ │       ├── Slot.js          # Time slots
+ │       ├── Invoice.js       # Invoices
+ │       ├── StaffProfile.js  # Staff profiles
+ │       ├── ShopSettings.js  # Shop settings
+ │       ├── Role.js          # RBAC roles
+ │       └── Offer.js         # Promotional offers
  ├── config/          # Configuration files
  │   ├── database.js
  │   └── constants.js
  ├── controllers/    # Request handlers
  │   ├── authController.js
+ │   ├── superAdminController.js
  │   ├── clientAdminController.js
  │   ├── staffController.js
  │   └── customerController.js
- ├── models/          # Mongoose models
- │   ├── Tenant.js
- │   ├── Shop.js
- │   ├── User.js
- │   ├── StaffProfile.js
- │   ├── Role.js
- │   ├── Service.js
- │   ├── Slot.js
- │   ├── Booking.js
- │   ├── Invoice.js
- │   ├── ShopSettings.js
- │   └── Offer.js
- ├── routes/          # API routes
- │   ├── authRoutes.js
- │   ├── clientAdminRoutes.js
- │   ├── staffRoutes.js
- │   ├── customerRoutes.js
- │   └── index.js
  ├── middlewares/     # Express middlewares
- │   ├── auth.js
- │   ├── tenant.js
+ │   ├── auth.js              # JWT authentication
+ │   ├── dbResolver.middleware.js  # Database resolution
  │   ├── rbac.js
  │   ├── errorHandler.js
  │   └── validator.js
  ├── services/        # Business logic
+ │   ├── clientDatabaseService.js  # Client database creation
  │   ├── slotService.js
  │   ├── bookingService.js
  │   ├── invoiceService.js
  │   └── cronService.js
+ ├── routes/          # API routes
+ │   ├── authRoutes.js
+ │   ├── superAdminRoutes.js
+ │   ├── clientAdminRoutes.js
+ │   ├── staffRoutes.js
+ │   ├── customerRoutes.js
+ │   └── index.js
  ├── sockets/         # Socket.IO handlers
  │   └── slotSocket.js
  ├── cron/            # Scheduled jobs
  │   └── jobs.js
  ├── utils/           # Utility functions
  │   ├── logger.js
- │   └── errors.js
+ │   ├── errors.js
+ │   └── seed.js
  ├── app.js           # Express app configuration
  └── server.js        # Server entry point
 ```
@@ -128,11 +149,16 @@ src/
 ## 🔐 User Roles & Permissions
 
 ### 1. Platform Super Admin
+- Stored in `platform_db`
 - Full system access
-- Can manage all tenants
+- Can create client admins (which auto-creates databases)
+- Manages all client subscriptions
+- Never accesses client data directly
 
 ### 2. Client Admin (Shop Owner)
-- Create and manage shops
+- Stored in their client database
+- Created when client admin is created
+- Can create and manage shops
 - Add/manage staff per shop
 - Configure shop settings
 - View shop-wise dashboards
@@ -141,6 +167,7 @@ src/
 - View invoices and revenue
 
 ### 3. Staff
+- Stored in client database
 - View shop bookings
 - Create walk-in customers
 - Assign slots
@@ -150,6 +177,7 @@ src/
 - Generate invoices
 
 ### 4. Customer (Online)
+- Stored in client database
 - View services
 - View available slots
 - Book slots (up to 7 days ahead)
@@ -164,21 +192,19 @@ src/
 ## 📡 API Endpoints
 
 ### Authentication
-- `POST /api/auth/login` - Login
-- `POST /api/auth/register` - Register customer
+- `POST /api/auth/login` - Login (platform admin or client users)
+- `POST /api/auth/register` - Register customer (requires databaseName)
 - `GET /api/auth/me` - Get current user
 
 ### Super Admin APIs (Platform Management)
 - `GET /api/super-admin/dashboard` - Get platform dashboard stats
-- `GET /api/super-admin/tenants` - Get all tenants with shop counts
-- `GET /api/super-admin/tenants/:tenantId` - Get tenant details
-- `POST /api/super-admin/tenants` - Create tenant with client admin credentials (3-day demo period)
-- `PUT /api/super-admin/tenants/:tenantId` - Update tenant
-- `POST /api/super-admin/tenants/:tenantId/admin` - Create client admin user for tenant
-- `PUT /api/super-admin/tenants/:tenantId/admin/:userId/password` - Update client admin password
-- `POST /api/super-admin/tenants/:tenantId/payments` - Record subscription payment
-- `PUT /api/super-admin/tenants/:tenantId/subscription` - Update subscription expiry
-- `GET /api/super-admin/tenants/:tenantId/payments` - Get payment history
+- `GET /api/super-admin/tenants` - Get all client admins with shop counts
+- `GET /api/super-admin/tenants/:clientId` - Get client admin details
+- `POST /api/super-admin/tenants` - Create client admin (auto-creates database)
+- `PUT /api/super-admin/tenants/:clientId` - Update client admin
+- `POST /api/super-admin/tenants/:clientId/payments` - Record subscription payment
+- `PUT /api/super-admin/tenants/:clientId/subscription` - Update subscription expiry
+- `GET /api/super-admin/tenants/:clientId/payments` - Get payment history
 
 ### Client Admin APIs
 - `POST /api/admin/shops` - Create shop
@@ -189,7 +215,7 @@ src/
 - `GET /api/admin/shops/:shopId/staff` - Get shop staff
 - `DELETE /api/admin/shops/:shopId/staff/:staffId` - Remove staff
 - `PUT /api/admin/shops/:shopId/staff/:staffId/password` - Update staff password
-- `PUT /api/admin/shops/:shopId/staff/:staffId/credentials` - Update staff credentials (email, password, etc.)
+- `PUT /api/admin/shops/:shopId/staff/:staffId/credentials` - Update staff credentials
 - `POST /api/admin/shops/:shopId/services` - Create service
 - `GET /api/admin/shops/:shopId/services` - Get shop services
 - `PUT /api/admin/shops/:shopId/settings` - Update shop settings
@@ -264,7 +290,10 @@ src/
 const socket = io('http://localhost:3000');
 
 // Join shop room
-socket.emit('join-shop', { tenantId: '...', shopId: '...' });
+socket.emit('join-shop', {
+  databaseName: 'client_64fa2c9e_db',
+  shopId: '...'
+});
 
 // Listen for slot updates
 socket.on('slot-updates', (data) => {
@@ -291,63 +320,53 @@ socket.on('booking-updated', (data) => {
 
 ## 🔒 Security Features
 
-- JWT authentication
+- JWT authentication with database context
 - Password hashing with bcrypt
-- Tenant isolation on all queries
+- Complete database isolation per client
 - Role-based access control (RBAC)
 - Input validation with express-validator
 - Rate limiting
 - Helmet.js for security headers
 - CORS configuration
 
-## 📊 Database Models
+## 📊 Database Architecture
 
-### Core Models
-- **Tenant**: Client/Shop Owner (with subscription management)
-- **Shop**: Individual shop locations
-- **User**: All users (admin, staff, customers)
-- **StaffProfile**: Staff-shop relationships
-- **Role**: RBAC roles and permissions
-- **Service**: Services offered
-- **Slot**: Time slots for bookings
-- **Booking**: Customer bookings (with start/finish time tracking)
-- **Invoice**: Generated invoices
-- **ShopSettings**: Shop configuration
-- **Offer**: Promotional offers (optional)
-- **SubscriptionPayment**: Subscription payment history
+### Platform Database (`platform_db`)
+- **PlatformAdmin**: Platform super admin users
+- **ClientAdmin**: Client admin metadata and subscription info
+- **ClientDatabaseMap**: Mapping of clientId to databaseName
+
+### Client Databases (`client_*_db`)
+Each client database contains:
+- **User**: All users (admin, staff, customers) - NO tenantId field
+- **Shop**: Shop locations - NO tenantId field
+- **Service**: Services offered - NO tenantId field
+- **Booking**: Customer bookings - NO tenantId field
+- **Slot**: Time slots - NO tenantId field
+- **Invoice**: Generated invoices - NO tenantId field
+- **StaffProfile**: Staff-shop relationships - NO tenantId field
+- **ShopSettings**: Shop configuration - NO tenantId field
+- **Role**: RBAC roles - NO tenantId field
+- **Offer**: Promotional offers - NO tenantId field
+
+**Note:** All client models removed `tenantId` field because database isolation provides complete separation.
 
 ## 💳 Subscription Management
 
 ### Features
-- **Monthly Subscription**: Tenants pay monthly subscription fees
-- **Manual Payment Recording**: Super admin records payments when received (no payment gateway)
+- **Monthly Subscription**: Client admins pay monthly subscription fees
+- **Manual Payment Recording**: Super admin records payments when received
 - **Automatic Expiry Extension**: Expiry date extends based on payment period
 - **Subscription Validation**: Middleware checks subscription status before operations
 - **Payment History**: Track all subscription payments with receipts
 - **Expiry Notifications**: Cron job checks for expiring subscriptions
 
 ### Super Admin Workflow
-1. View all tenants with shop counts and subscription status
-2. When tenant makes payment, record it via API
+1. View all client admins with shop counts and subscription status
+2. When client admin makes payment, record it via API
 3. System automatically extends subscription expiry date
-4. View payment history for each tenant
+4. View payment history for each client
 5. Manually update expiry if needed
-
-### Subscription Payment Recording
-```bash
-curl -X POST http://localhost:3000/api/super-admin/tenants/TENANT_ID/payments \
-  -H "Authorization: Bearer SUPER_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "amount": 99.99,
-    "currency": "USD",
-    "paymentMethod": "bank_transfer",
-    "subscriptionPeriod": 1,
-    "paymentDate": "2024-01-15",
-    "receiptNumber": "REC-001",
-    "notes": "Payment received via bank transfer"
-  }'
-```
 
 ## ⏱️ Service Time Tracking
 
@@ -362,11 +381,47 @@ curl -X POST http://localhost:3000/api/super-admin/tenants/TENANT_ID/payments \
 - `arrivedAt`: Customer arrival time
 - `startedAt`: Service start time
 - `completedAt`: Service completion time
-- `finishedAt`: Service finish time (same as completedAt, for clarity)
+- `finishedAt`: Service finish time
 
 ## 🧪 Testing the API
 
-### 1. Register a Customer
+### 1. Login as Platform Admin
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@bookacut.com",
+    "password": "ChangeThisPassword123!"
+  }'
+```
+
+### 2. Create Client Admin (Auto-creates database)
+```bash
+curl -X POST http://localhost:3000/api/super-admin/tenants \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@abcsalon.com",
+    "phone": "1234567890",
+    "adminPassword": "SecurePassword123!",
+    "adminFirstName": "John",
+    "adminLastName": "Doe",
+    "subscriptionPlan": "premium",
+    "maxShops": 10
+  }'
+```
+
+### 3. Login as Client Admin
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@abcsalon.com",
+    "password": "SecurePassword123!"
+  }'
+```
+
+### 4. Register Customer
 ```bash
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
@@ -374,26 +429,10 @@ curl -X POST http://localhost:3000/api/auth/register \
     "email": "customer@example.com",
     "password": "password123",
     "phone": "1234567890",
-    "firstName": "John",
+    "firstName": "Jane",
     "lastName": "Doe",
-    "tenantId": "YOUR_TENANT_ID"
+    "databaseName": "client_64fa2c9e_db"
   }'
-```
-
-### 2. Login
-```bash
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "customer@example.com",
-    "password": "password123"
-  }'
-```
-
-### 3. Get Available Slots
-```bash
-curl -X GET "http://localhost:3000/api/customer/shops/SHOP_ID/slots?startDate=2024-01-01&endDate=2024-01-07" \
-  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ## 🛠️ Development
@@ -408,7 +447,7 @@ See `.env.example` for all available configuration options.
 - Comprehensive comments
 
 ### Adding New Features
-1. Create model in `src/models/`
+1. Create model in appropriate location (`platform/models/` or `client/models/`)
 2. Create service in `src/services/`
 3. Create controller in `src/controllers/`
 4. Add routes in `src/routes/`
@@ -416,19 +455,20 @@ See `.env.example` for all available configuration options.
 
 ## 📝 Notes
 
-- **Tenant Creation:** Platform super admin creates tenants and sets client admin credentials
+- **Client Admin Creation:** Platform super admin creates client admins, which automatically creates a new database
+- **Database Isolation:** Each client database is completely isolated - no cross-database queries
 - **Multi-Domain:** Each client admin can deploy frontend on their own domain
-- **Demo Period:** New tenants get 3-day demo period automatically
-- All API endpoints require tenant context (except platform admin)
-- Slot capacity dynamically adjusts based on active staff count
-- Bookings can be made up to 7 days in advance (configurable)
-- No-show timeout is 5 minutes (configurable per shop)
-- Price editing can be enabled/disabled per shop
-- Maximum discount percentage can be configured per shop
-- Subscription expiry is checked before allowing tenant operations
-- Service start and finish times are tracked for performance metrics
-- No payment gateway integration - payments are recorded manually by super admin
-- Super admin can view all tenant details, shops, and expiry dates
+- **Demo Period:** New client admins get 3-day demo period automatically
+- **JWT Context:** JWT tokens include `databaseName` for client users to route requests correctly
+- **Slot capacity** dynamically adjusts based on active staff count
+- **Bookings** can be made up to 7 days in advance (configurable)
+- **No-show timeout** is 5 minutes (configurable per shop)
+- **Price editing** can be enabled/disabled per shop
+- **Maximum discount percentage** can be configured per shop
+- **Subscription expiry** is checked before allowing client operations
+- **Service start and finish times** are tracked for performance metrics
+- **No payment gateway integration** - payments are recorded manually by super admin
+- **Super admin can view** all client admin details, shops (via queries), and expiry dates
 
 ## 🐛 Troubleshooting
 
@@ -441,6 +481,11 @@ See `.env.example` for all available configuration options.
 - Check `JWT_SECRET` is set
 - Verify token expiration time
 - Ensure token is sent in Authorization header
+
+### Database Not Found
+- Verify client admin exists in platform database
+- Check database name in JWT token
+- Ensure database was created during client admin creation
 
 ### Slot Generation Issues
 - Verify shop has active staff
@@ -458,4 +503,3 @@ For issues and questions, please contact the development team.
 ---
 
 **Built with ❤️ for Beauty Parlour & Barber Shop Management**
-

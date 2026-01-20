@@ -33,6 +33,10 @@
 - Local: `mongodb://localhost:27017/bookacut`
 - Atlas: `mongodb+srv://user:pass@cluster.mongodb.net/bookacut`
 
+**Important:** The system uses a single MongoDB cluster with multiple databases:
+- `platform_db` - Platform super admin and client admin metadata
+- `client_*_db` - Individual client databases (created automatically)
+
 ### JWT Configuration
 
 | Variable | Default | Description |
@@ -95,8 +99,10 @@ CORS_ORIGIN=https://yourdomain.com,https://www.yourdomain.com
 
 | Variable | Default | Description |
 |---------|---------|-------------|
-| `CREATE_SAMPLE_TENANT` | `false` | Create sample tenant in seed script |
+| `CREATE_SAMPLE_CLIENT` | `false` | Create sample client admin and database in seed script |
 | `LOG_LEVEL` | `info` | Logging level: `error`, `warn`, `info`, `debug` |
+
+**Note:** `CREATE_SAMPLE_CLIENT` creates a sample client admin in the seed script, which automatically creates a new client database.
 
 ## Production Checklist
 

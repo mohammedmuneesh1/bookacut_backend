@@ -12,10 +12,11 @@
    cp .env.example .env
    ```
    Edit `.env` and set:
-   - `MONGODB_URI` - Your MongoDB connection string
-   - `JWT_SECRET` - A strong secret key
-   - `PLATFORM_ADMIN_EMAIL` - Admin email (optional)
-   - `PLATFORM_ADMIN_PASSWORD` - Admin password (optional)
+   - `MONGODB_URI` - Your MongoDB connection string (e.g., `mongodb://localhost:27017/bookacut`)
+   - `JWT_SECRET` - A strong secret key (min 32 characters)
+   - `PLATFORM_ADMIN_EMAIL` - Admin email (optional, default: `admin@bookacut.com`)
+   - `PLATFORM_ADMIN_PASSWORD` - Admin password (optional, default: `ChangeThisPassword123!`)
+   - `CREATE_SAMPLE_CLIENT` - Set to `true` to create sample client (optional)
 
 3. **Start MongoDB**
    Ensure MongoDB is running on your system.
@@ -25,9 +26,8 @@
    npm run seed
    ```
    This creates:
-   - Platform super admin user
-   - Default roles
-   - Sample tenant (if `CREATE_SAMPLE_TENANT=true` in .env)
+   - Platform super admin user in `platform_db`
+   - Sample client admin and database (if `CREATE_SAMPLE_CLIENT=true`)
 
 5. **Start Server**
    ```bash
@@ -38,132 +38,109 @@
    npm start
    ```
 
-## Creating Your First Tenant
+## Creating Your First Client Admin
 
-### Option 1: Via API (Recommended)
+### Step 1: Login as Platform Super Admin
 
-1. **Login as Platform Admin**
-   ```bash
-   curl -X POST http://localhost:3000/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "admin@bookacut.com",
-       "password": "ChangeThisPassword123!"
-     }'
-   ```
-
-2. **Create Tenant** (You'll need to add this endpoint or use MongoDB directly)
-   ```bash
-   # Using MongoDB shell or Compass
-   db.tenants.insertOne({
-     name: "My Shop Owner",
-     email: "owner@example.com",
-     phone: "1234567890",
-     isActive: true,
-     subscriptionPlan: "premium",
-     maxShops: 10
-   })
-   ```
-
-3. **Create Client Admin User**
-   ```bash
-   curl -X POST http://localhost:3000/api/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "admin@myshop.com",
-       "password": "password123",
-       "phone": "1234567890",
-       "firstName": "Shop",
-       "lastName": "Owner",
-       "tenantId": "YOUR_TENANT_ID"
-     }'
-   ```
-
-### Option 2: Direct MongoDB Insert
-
-```javascript
-// In MongoDB shell or Compass
-use bookacut
-
-// Create Tenant
-const tenant = db.tenants.insertOne({
-  name: "My Shop Owner",
-  email: "owner@example.com",
-  phone: "1234567890",
-  isActive: true,
-  subscriptionPlan: "premium",
-  maxShops: 10,
-  createdAt: new Date(),
-  updatedAt: new Date()
-})
-
-// Create Roles for Tenant
-const tenantId = tenant.insertedId
-
-db.roles.insertMany([
-  {
-    tenantId: tenantId,
-    name: "client_admin",
-    permissions: [
-      "manage_shops",
-      "manage_staff",
-      "manage_services",
-      "view_dashboard",
-      "manage_slots",
-      "view_invoices",
-      "manage_settings"
-    ],
-    isSystemRole: true
-  },
-  {
-    tenantId: tenantId,
-    name: "staff",
-    permissions: [
-      "view_bookings",
-      "create_walkin",
-      "edit_price",
-      "mark_arrived",
-      "mark_no_show",
-      "complete_service",
-      "generate_invoice"
-    ],
-    isSystemRole: true
-  },
-  {
-    tenantId: tenantId,
-    name: "customer",
-    permissions: [
-      "view_services",
-      "view_slots",
-      "book_slot",
-      "view_booking_history",
-      "cancel_booking"
-    ],
-    isSystemRole: true
-  }
-])
-
-// Create Client Admin User (password will be hashed on first save)
-// Note: You'll need to use the API to create users with proper password hashing
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@bookacut.com",
+    "password": "ChangeThisPassword123!"
+  }'
 ```
+
+**Response:**
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "...",
+    "email": "admin@bookacut.com",
+    "role": "platform_super_admin",
+    "databaseName": "platform_db"
+  }
+}
+```
+
+### Step 2: Create Client Admin
+
+This will automatically create:
+- Client admin record in `platform_db`
+- New client database (e.g., `client_64fa2c9e_db`)
+- Client admin user in the client database
+- Default roles in the client database
+
+```bash
+curl -X POST http://localhost:3000/api/super-admin/tenants \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@myshop.com",
+    "phone": "1234567890",
+    "adminPassword": "SecurePassword123!",
+    "adminFirstName": "John",
+    "adminLastName": "Doe",
+    "subscriptionPlan": "premium",
+    "maxShops": 10
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Client admin and database created successfully with 3-day demo period",
+  "client": {
+    "clientId": "64fa2c9e...",
+    "databaseName": "client_64fa2c9e_db",
+    "email": "admin@myshop.com",
+    "subscriptionExpiresAt": "2024-01-18T00:00:00.000Z",
+    "daysUntilExpiry": 3
+  },
+  "adminUser": {
+    "email": "admin@myshop.com",
+    "firstName": "John",
+    "lastName": "Doe"
+  }
+}
+```
+
+### Step 3: Login as Client Admin
+
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@myshop.com",
+    "password": "SecurePassword123!"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "...",
+    "email": "admin@myshop.com",
+    "role": "client_admin",
+    "databaseName": "client_64fa2c9e_db"
+  }
+}
+```
+
+**Note:** The JWT token includes `databaseName` for automatic database routing.
 
 ## Typical Workflow
 
-1. **Client Admin Login**
-   ```bash
-   curl -X POST http://localhost:3000/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "admin@myshop.com",
-       "password": "password123",
-       "tenantId": "YOUR_TENANT_ID"
-     }'
-   ```
-
-2. **Create Shop**
+1. **Create Shop**
    ```bash
    curl -X POST http://localhost:3000/api/admin/shops \
-     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Authorization: Bearer CLIENT_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
        "name": "Main Street Salon",
@@ -178,24 +155,24 @@ db.roles.insertMany([
      }'
    ```
 
-3. **Add Staff**
+2. **Add Staff**
    ```bash
    curl -X POST http://localhost:3000/api/admin/shops/SHOP_ID/staff \
-     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Authorization: Bearer CLIENT_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
        "email": "staff@myshop.com",
-       "password": "password123",
+       "password": "StaffPass123!",
        "phone": "555-5678",
-       "firstName": "John",
+       "firstName": "Jane",
        "lastName": "Stylist"
      }'
    ```
 
-4. **Create Service**
+3. **Create Service**
    ```bash
    curl -X POST http://localhost:3000/api/admin/shops/SHOP_ID/services \
-     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Authorization: Bearer CLIENT_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
        "name": "Haircut",
@@ -206,14 +183,28 @@ db.roles.insertMany([
      }'
    ```
 
-5. **Generate Slots**
+4. **Generate Slots**
    ```bash
    curl -X POST http://localhost:3000/api/admin/shops/SHOP_ID/slots/generate \
-     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Authorization: Bearer CLIENT_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
        "startDate": "2024-01-01",
        "endDate": "2024-01-07"
+     }'
+   ```
+
+5. **Register Customer**
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{
+       "email": "customer@example.com",
+       "password": "CustomerPass123!",
+       "phone": "555-9999",
+       "firstName": "John",
+       "lastName": "Customer",
+       "databaseName": "client_64fa2c9e_db"
      }'
    ```
 
@@ -232,13 +223,16 @@ db.roles.insertMany([
 
 Import these sample requests:
 
-1. **Login** - POST `/api/auth/login`
-2. **Create Shop** - POST `/api/admin/shops`
-3. **Add Staff** - POST `/api/admin/shops/:shopId/staff`
-4. **Create Service** - POST `/api/admin/shops/:shopId/services`
-5. **Generate Slots** - POST `/api/admin/shops/:shopId/slots/generate`
-6. **Get Available Slots** - GET `/api/customer/shops/:shopId/slots`
-7. **Book Slot** - POST `/api/customer/shops/:shopId/bookings`
+1. **Login (Platform Admin)** - POST `/api/auth/login`
+2. **Create Client Admin** - POST `/api/super-admin/tenants`
+3. **Login (Client Admin)** - POST `/api/auth/login`
+4. **Create Shop** - POST `/api/admin/shops`
+5. **Add Staff** - POST `/api/admin/shops/:shopId/staff`
+6. **Create Service** - POST `/api/admin/shops/:shopId/services`
+7. **Generate Slots** - POST `/api/admin/shops/:shopId/slots/generate`
+8. **Register Customer** - POST `/api/auth/register` (requires `databaseName`)
+9. **Get Available Slots** - GET `/api/customer/shops/:shopId/slots`
+10. **Book Slot** - POST `/api/customer/shops/:shopId/bookings`
 
 ## Socket.IO Testing
 
@@ -247,8 +241,9 @@ Import these sample requests:
 const io = require('socket.io-client');
 const socket = io('http://localhost:3000');
 
+// Join shop room (use databaseName from client admin login)
 socket.emit('join-shop', {
-  tenantId: 'YOUR_TENANT_ID',
+  databaseName: 'client_64fa2c9e_db',
   shopId: 'YOUR_SHOP_ID'
 });
 
@@ -273,15 +268,40 @@ socket.on('booking-updated', (data) => {
 - Check token expiration
 - Ensure token is sent in `Authorization: Bearer TOKEN` header
 
-### Tenant Not Found
-- Verify tenant exists in database
-- Check tenantId in request
-- Ensure tenant is active
+### Database Not Found
+- Verify client admin exists in platform database
+- Check that database was created during client admin creation
+- Ensure `databaseName` is included in JWT token
+
+### Client Admin Login Failed
+- Verify client admin exists
+- Check email and password
+- Ensure client admin is active
+- Verify subscription hasn't expired
+
+### Customer Registration Failed
+- Ensure `databaseName` is provided in request body
+- Verify database name matches client admin's database
+- Check if customer email already exists in that database
 
 ### Slot Generation Failed
 - Ensure shop has active staff
 - Check working hours configuration
 - Verify shop is active
+
+## Database Architecture Overview
+
+### Platform Database (`platform_db`)
+- Contains platform super admin users
+- Contains client admin metadata
+- Maps client IDs to database names
+- No client data stored here
+
+### Client Databases (`client_*_db`)
+- Each client gets a unique database
+- All client data (shops, users, bookings, etc.) stored here
+- Complete isolation from other clients
+- No `tenantId` fields needed (database provides isolation)
 
 ## Next Steps
 
@@ -289,7 +309,6 @@ socket.on('booking-updated', (data) => {
 2. Configure shop settings
 3. Add more services
 4. Customize working hours
-5. Set up payment integration (if needed)
+5. Record subscription payments (super admin)
 
 For detailed API documentation, see `README.md`.
-

@@ -1,7 +1,9 @@
-const Tenant = require('../models/Tenant');
-const Shop = require('../models/Shop');
-const SubscriptionPayment = require('../models/SubscriptionPayment');
-const User = require('../models/User');
+const { getClientAdminModel } = require('../platform/models/ClientAdmin');
+const { getClientDatabaseMapModel } = require('../platform/models/ClientDatabaseMap');
+const connectionManager = require('../database/connectionManager');
+const { getModel } = require('../database/modelFactory');
+const shopSchema = require('../client/models/Shop').schema;
+const clientDatabaseService = require('../services/clientDatabaseService');
 const { NotFoundError, ValidationError } = require('../utils/errors');
 const moment = require('moment');
 
@@ -11,7 +13,7 @@ const moment = require('moment');
  */
 class SuperAdminController {
   /**
-   * Get All Tenants with Shop Counts
+   * Get All Client Admins (Tenants) with Shop Counts
    */
   async getAllTenants(req, res, next) {
     try {
@@ -25,71 +27,72 @@ class SuperAdminController {
       }
       if (search) {
         query.$or = [
-          { name: { $regex: search, $options: 'i' } },
+          { firstName: { $regex: search, $options: 'i' } },
+          { lastName: { $regex: search, $options: 'i' } },
           { email: { $regex: search, $options: 'i' } },
         ];
       }
 
-      // Get tenants with shop counts
-      const tenants = await Tenant.find(query)
+      const ClientAdmin = getClientAdminModel();
+
+      // Get client admins
+      const clientAdmins = await ClientAdmin.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit));
 
-      // Get shop counts and admin details for each tenant
-      const tenantsWithShopCounts = await Promise.all(
-        tenants.map(async (tenant) => {
-          const shopCount = await Shop.countDocuments({
-            tenantId: tenant._id,
-            isActive: true,
-          });
+      // Get shop counts and admin details for each client
+      const clientsWithShopCounts = await Promise.all(
+        clientAdmins.map(async (clientAdmin) => {
+          // Get shop count from client database
+          let shopCount = 0;
+          let totalShops = 0;
 
-          const totalShops = await Shop.countDocuments({
-            tenantId: tenant._id,
-          });
+          try {
+            const clientDb = await connectionManager.getDb(clientAdmin.databaseName);
+            const Shop = await getModel(clientAdmin.databaseName, 'Shop', shopSchema);
 
-          // Get client admin user
-          const adminUser = await User.findOne({
-            tenantId: tenant._id,
-            role: 'client_admin',
-          }).select('email firstName lastName phone lastLogin createdAt');
+            shopCount = await Shop.countDocuments({ isActive: true });
+            totalShops = await Shop.countDocuments({});
+          } catch (error) {
+            console.error(`Error getting shop count for ${clientAdmin.databaseName}:`, error.message);
+          }
 
           // Check subscription status
           const isSubscriptionActive =
-            tenant.subscriptionExpiresAt && moment(tenant.subscriptionExpiresAt).isAfter(moment());
+            clientAdmin.subscriptionExpiresAt && moment(clientAdmin.subscriptionExpiresAt).isAfter(moment());
 
-          const daysUntilExpiry = tenant.subscriptionExpiresAt
-            ? moment(tenant.subscriptionExpiresAt).diff(moment(), 'days')
+          const daysUntilExpiry = clientAdmin.subscriptionExpiresAt
+            ? moment(clientAdmin.subscriptionExpiresAt).diff(moment(), 'days')
             : null;
 
-          const isExpired = tenant.subscriptionExpiresAt
-            ? moment(tenant.subscriptionExpiresAt).isBefore(moment())
+          const isExpired = clientAdmin.subscriptionExpiresAt
+            ? moment(clientAdmin.subscriptionExpiresAt).isBefore(moment())
             : false;
 
-          const isDemoPeriod = tenant.subscriptionExpiresAt
-            ? moment(tenant.subscriptionExpiresAt).diff(moment(tenant.createdAt), 'days') <= 3
+          const isDemoPeriod = clientAdmin.subscriptionExpiresAt
+            ? moment(clientAdmin.subscriptionExpiresAt).diff(moment(clientAdmin.createdAt), 'days') <= 3
             : false;
 
           return {
-            ...tenant.toObject(),
+            ...clientAdmin.toObject(),
             shopCount,
             totalShops,
             isSubscriptionActive,
             isExpired,
             isDemoPeriod,
             daysUntilExpiry,
-            adminUser,
-            subscriptionStartDate: tenant.createdAt,
-            subscriptionExpiryDate: tenant.subscriptionExpiresAt,
+            subscriptionStartDate: clientAdmin.createdAt,
+            subscriptionExpiryDate: clientAdmin.subscriptionExpiresAt,
           };
         })
       );
 
-      const total = await Tenant.countDocuments(query);
+      const total = await ClientAdmin.countDocuments(query);
 
       res.json({
         success: true,
-        tenants: tenantsWithShopCounts,
+        tenants: clientsWithShopCounts,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -379,114 +382,80 @@ class SuperAdminController {
   }
 
   /**
-   * Create Tenant (Super Admin)
+   * Create Client Admin (Tenant) with Database
+   * Creates a new client database and initializes it with client admin user
    */
   async createTenant(req, res, next) {
     try {
       const {
-        name,
         email,
         phone,
-        address,
         subscriptionPlan,
         maxShops,
-        adminEmail,
+        maxStaff,
         adminPassword,
         adminFirstName,
         adminLastName,
         adminPhone,
       } = req.body;
 
-      if (!name || !email || !phone) {
-        throw new ValidationError('Tenant name, email, and phone are required');
+      if (!email || !phone) {
+        throw new ValidationError('Email and phone are required');
       }
 
-      if (!adminEmail || !adminPassword || !adminFirstName || !adminLastName) {
-        throw new ValidationError('Client admin email, password, first name, and last name are required');
+      if (!adminPassword || !adminFirstName || !adminLastName) {
+        throw new ValidationError('Client admin password, first name, and last name are required');
       }
 
-      // Check if tenant already exists
-      const existingTenant = await Tenant.findOne({ email: email.toLowerCase() });
+      // Check if client admin already exists
+      const ClientAdmin = getClientAdminModel();
+      const existingClientAdmin = await ClientAdmin.findOne({ email: email.toLowerCase() });
 
-      if (existingTenant) {
-        throw new ValidationError('Tenant with this email already exists');
-      }
-
-      // Check if admin user already exists
-      const existingUser = await User.findOne({ email: adminEmail.toLowerCase() });
-
-      if (existingUser) {
-        throw new ValidationError('User with this email already exists');
+      if (existingClientAdmin) {
+        throw new ValidationError('Client admin with this email already exists');
       }
 
       // Set 3-day demo period
       const demoExpiry = moment().add(3, 'days').toDate();
 
-      // Create tenant
-      const tenant = await Tenant.create({
-        name,
-        email: email.toLowerCase(),
-        phone,
-        address,
+      // Create client database and initialize
+      const result = await clientDatabaseService.createClientDatabase({
+        email,
+        firstName: adminFirstName,
+        lastName: adminLastName,
+        phone: adminPhone || phone,
+        password: adminPassword,
+        maxShops: maxShops || 10,
+        maxStaff: maxStaff || 50,
         subscriptionPlan: subscriptionPlan || 'basic',
-        maxShops: maxShops || 3,
-        isActive: true,
         subscriptionExpiresAt: demoExpiry,
       });
 
-      // Get or create client admin role
-      const Role = require('../models/Role');
-      const { ROLES, PERMISSIONS } = require('../config/constants');
-
-      let role = await Role.findOne({
-        tenantId: tenant._id,
-        name: ROLES.CLIENT_ADMIN,
-      });
-
-      if (!role) {
-        role = await Role.create({
-          tenantId: tenant._id,
-          name: ROLES.CLIENT_ADMIN,
-          permissions: [
-            PERMISSIONS.MANAGE_SHOPS,
-            PERMISSIONS.MANAGE_STAFF,
-            PERMISSIONS.MANAGE_SERVICES,
-            PERMISSIONS.VIEW_DASHBOARD,
-            PERMISSIONS.MANAGE_SLOTS,
-            PERMISSIONS.VIEW_INVOICES,
-            PERMISSIONS.MANAGE_SETTINGS,
-          ],
-          isSystemRole: true,
-        });
-      }
-
-      // Create client admin user
-      const adminUser = await User.create({
-        tenantId: tenant._id,
-        email: adminEmail.toLowerCase(),
-        password: adminPassword,
-        phone: adminPhone || phone,
-        firstName: adminFirstName,
-        lastName: adminLastName,
-        role: ROLES.CLIENT_ADMIN,
-        roleId: role._id,
-        isActive: true,
-      });
+      const { clientId, databaseName, clientAdmin } = result;
 
       res.status(201).json({
         success: true,
-        message: 'Tenant and client admin created successfully with 3-day demo period',
-        tenant: {
-          ...tenant.toObject(),
+        message: 'Client admin and database created successfully with 3-day demo period',
+        client: {
+          clientId,
+          databaseName,
+          email: clientAdmin.email,
+          firstName: clientAdmin.firstName,
+          lastName: clientAdmin.lastName,
+          phone: clientAdmin.phone,
+          maxShops: clientAdmin.maxShops,
+          maxStaff: clientAdmin.maxStaff,
+          subscriptionPlan: clientAdmin.subscriptionPlan,
           subscriptionExpiresAt: demoExpiry,
           daysUntilExpiry: 3,
+          isActive: clientAdmin.isActive,
+          createdAt: clientAdmin.createdAt,
         },
         adminUser: {
-          id: adminUser._id,
-          email: adminUser.email,
-          firstName: adminUser.firstName,
-          lastName: adminUser.lastName,
-          phone: adminUser.phone,
+          email: clientAdmin.email,
+          firstName: clientAdmin.firstName,
+          lastName: clientAdmin.lastName,
+          phone: clientAdmin.phone,
         },
       });
     } catch (error) {

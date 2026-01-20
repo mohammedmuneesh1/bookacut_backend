@@ -1,14 +1,32 @@
-# Tenant Management Guide
+# Client Admin Management Guide
 
 ## Overview
 
-Platform super admin creates tenants and sets client admin credentials. Each client admin can deploy their software on their own domain. Super admin manages all tenant details, shops, and subscription expiry.
+Platform super admin creates client admins, and the system automatically creates a dedicated database for each client. Each client admin can deploy their software on their own domain. Super admin manages all client admin details, shops (via queries), and subscription expiry.
+
+## Architecture
+
+### Database Structure
+
+- **Platform Database (`platform_db`)**: 
+  - Platform super admin users
+  - Client admin metadata and subscription info
+  - Client ID to database name mapping
+  
+- **Client Databases (`client_*_db`)**:
+  - Each client gets a unique database (e.g., `client_64fa2c9e_db`)
+  - All client data stored here (shops, users, bookings, invoices, etc.)
+  - Complete data isolation from other clients
 
 ## Workflow
 
-### 1. Super Admin Creates Tenant
+### 1. Super Admin Creates Client Admin
 
-Super admin creates a new tenant with client admin credentials:
+Super admin creates a new client admin with credentials. The system automatically:
+- Creates client admin record in `platform_db`
+- Creates a new client database (e.g., `client_64fa2c9e_db`)
+- Initializes the database with default roles
+- Creates client admin user in the client database
 
 ```bash
 POST /api/super-admin/tenants
@@ -17,56 +35,50 @@ POST /api/super-admin/tenants
 **Request Body:**
 ```json
 {
-  "name": "ABC Beauty Salon Group",
-  "email": "contact@abcsalon.com",
+  "email": "admin@abcsalon.com",
   "phone": "1234567890",
-  "address": {
-    "street": "123 Main St",
-    "city": "New York",
-    "state": "NY",
-    "zipCode": "10001"
-  },
-  "subscriptionPlan": "premium",
-  "maxShops": 10,
-  "adminEmail": "admin@abcsalon.com",
   "adminPassword": "SecurePassword123!",
   "adminFirstName": "John",
   "adminLastName": "Doe",
-  "adminPhone": "1234567890"
+  "subscriptionPlan": "premium",
+  "maxShops": 10,
+  "maxStaff": 50
 }
 ```
 
 **Required Fields:**
-- `name` - Company/tenant name
-- `email` - Tenant contact email
-- `phone` - Tenant phone number
-- `adminEmail` - Client admin email (username)
+- `email` - Client admin email (unique identifier)
+- `phone` - Phone number
 - `adminPassword` - Client admin password (min 6 characters)
 - `adminFirstName` - Client admin first name
 - `adminLastName` - Client admin last name
 
 **Optional Fields:**
-- `address` - Tenant address
-- `subscriptionPlan` - Plan type (basic/premium/enterprise)
-- `maxShops` - Maximum shops allowed (default: 3 during demo)
-- `adminPhone` - Client admin phone (uses tenant phone if not provided)
+- `subscriptionPlan` - Plan type (basic/premium/enterprise, default: basic)
+- `maxShops` - Maximum shops allowed (default: 10)
+- `maxStaff` - Maximum staff allowed (default: 50)
 
 **Response:**
 ```json
 {
   "success": true,
-  "message": "Tenant and client admin created successfully with 3-day demo period",
-  "tenant": {
-    "_id": "...",
-    "name": "ABC Beauty Salon Group",
-    "email": "contact@abcsalon.com",
+  "message": "Client admin and database created successfully with 3-day demo period",
+  "client": {
+    "clientId": "64fa2c9e...",
+    "databaseName": "client_64fa2c9e_db",
+    "email": "admin@abcsalon.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "phone": "1234567890",
+    "maxShops": 10,
+    "maxStaff": 50,
+    "subscriptionPlan": "premium",
     "subscriptionExpiresAt": "2024-01-18T00:00:00.000Z",
     "daysUntilExpiry": 3,
-    "subscriptionPlan": "premium",
-    "maxShops": 10
+    "isActive": true,
+    "createdAt": "2024-01-15T00:00:00.000Z"
   },
   "adminUser": {
-    "id": "...",
     "email": "admin@abcsalon.com",
     "firstName": "John",
     "lastName": "Doe",
@@ -77,10 +89,11 @@ POST /api/super-admin/tenants
 
 ### 2. Demo Period
 
-- **Duration:** 3 days from tenant creation
+- **Duration:** 3 days from client admin creation
 - **Features:** Full access to all features
 - **Limitations:** 
-  - Max shops: 3 (or specified maxShops)
+  - Max shops: 10 (or specified maxShops)
+  - Max staff: 50 (or specified maxStaff)
   - Basic plan features (unless premium/enterprise specified)
 - **Expiry:** After 3 days, access is blocked until payment
 
@@ -111,11 +124,13 @@ POST /api/auth/login
     "firstName": "John",
     "lastName": "Doe",
     "role": "client_admin",
-    "tenantId": "...",
+    "databaseName": "client_64fa2c9e_db",
     "permissions": [...]
   }
 }
 ```
+
+**Important:** The JWT token includes `databaseName` which is used by the middleware to route requests to the correct database.
 
 ### 4. Client Admin Deploys on Own Domain
 
@@ -123,11 +138,11 @@ Each client admin can:
 - Deploy the frontend on their own domain
 - Use their own branding
 - Customize the software for their business
-- All data remains isolated per tenant
+- All data remains isolated in their database
 
-### 5. Super Admin Views All Tenants
+### 5. Super Admin Views All Client Admins
 
-Super admin can view all tenants with complete details:
+Super admin can view all client admins with complete details:
 
 ```bash
 GET /api/super-admin/tenants
@@ -146,8 +161,11 @@ GET /api/super-admin/tenants
   "tenants": [
     {
       "_id": "...",
-      "name": "ABC Beauty Salon Group",
-      "email": "contact@abcsalon.com",
+      "clientId": "64fa2c9e...",
+      "databaseName": "client_64fa2c9e_db",
+      "email": "admin@abcsalon.com",
+      "firstName": "John",
+      "lastName": "Doe",
       "phone": "1234567890",
       "shopCount": 5,
       "totalShops": 5,
@@ -159,14 +177,7 @@ GET /api/super-admin/tenants
       "subscriptionExpiryDate": "2024-01-18T00:00:00.000Z",
       "subscriptionPlan": "premium",
       "maxShops": 10,
-      "adminUser": {
-        "email": "admin@abcsalon.com",
-        "firstName": "John",
-        "lastName": "Doe",
-        "phone": "1234567890",
-        "lastLogin": "2024-01-16T10:00:00.000Z",
-        "createdAt": "2024-01-15T00:00:00.000Z"
-      }
+      "maxStaff": 50
     }
   ],
   "pagination": {
@@ -178,19 +189,21 @@ GET /api/super-admin/tenants
 }
 ```
 
-### 6. Super Admin Views Tenant Details
+**Note:** Shop counts are fetched by querying the client's database.
 
-Get complete information about a specific tenant:
+### 6. Super Admin Views Client Admin Details
+
+Get complete information about a specific client admin:
 
 ```bash
-GET /api/super-admin/tenants/:tenantId
+GET /api/super-admin/tenants/:clientId
 ```
 
 **Response includes:**
-- Complete tenant information
-- Active and total shop counts
+- Complete client admin information
+- Active and total shop counts (queried from client database)
 - Subscription status and expiry details
-- Admin user details (email, name, phone, last login)
+- Admin user details
 - Recent payment history
 - Demo period status
 
@@ -199,7 +212,7 @@ GET /api/super-admin/tenants/:tenantId
 When client admin pays, super admin records payment:
 
 ```bash
-POST /api/super-admin/tenants/:tenantId/payments
+POST /api/super-admin/tenants/:clientId/payments
 ```
 
 **Request Body:**
@@ -216,7 +229,7 @@ POST /api/super-admin/tenants/:tenantId/payments
 ```
 
 **What happens:**
-- Payment is recorded in history
+- Payment is recorded in history (in `platform_db`)
 - Subscription expiry extends automatically
 - If expired: new expiry = today + period
 - If active: new expiry = current expiry + period
@@ -226,53 +239,17 @@ POST /api/super-admin/tenants/:tenantId/payments
 - Payment period: 1 month
 - New expiry: Feb 18, 2024
 
-## Additional Client Admin Management
-
-### Create Additional Client Admin
-
-Super admin can create additional client admin users for a tenant:
-
-```bash
-POST /api/super-admin/tenants/:tenantId/admin
-```
-
-**Request Body:**
-```json
-{
-  "email": "manager@abcsalon.com",
-  "password": "ManagerPass123!",
-  "firstName": "Jane",
-  "lastName": "Manager",
-  "phone": "9876543210"
-}
-```
-
-### Update Client Admin Password
-
-Super admin can update client admin password:
-
-```bash
-PUT /api/super-admin/tenants/:tenantId/admin/:userId/password
-```
-
-**Request Body:**
-```json
-{
-  "password": "NewSecurePassword123!"
-}
-```
-
 ## Multi-Domain Deployment
 
 ### Architecture
 
-Each tenant (client admin) can deploy their own frontend:
+Each client admin can deploy their own frontend:
 
 ```
 Platform Backend (bookacut.com/api)
-    ├── Tenant 1 (abcsalon.com) → Uses bookacut.com/api
-    ├── Tenant 2 (xyzsalon.com) → Uses bookacut.com/api
-    └── Tenant 3 (beautysalon.com) → Uses bookacut.com/api
+    ├── Client Admin 1 (abcsalon.com) → Uses bookacut.com/api
+    ├── Client Admin 2 (xyzsalon.com) → Uses bookacut.com/api
+    └── Client Admin 3 (beautysalon.com) → Uses bookacut.com/api
 ```
 
 ### Frontend Configuration
@@ -284,21 +261,23 @@ Each client admin's frontend should:
    const API_BASE_URL = 'https://bookacut.com/api';
    ```
 
-2. **Include Tenant Context:**
-   - All API calls include tenantId automatically (from JWT)
-   - Frontend doesn't need to manage tenantId
+2. **Authentication:**
+   - Client admin logs in via API
+   - Receives JWT token with `databaseName`
+   - Token automatically routes requests to correct database
 
 3. **Custom Branding:**
    - Each domain can have custom branding
-   - Logo, colors, name can be tenant-specific
-   - Data remains isolated
+   - Logo, colors, name can be client-specific
+   - Data remains isolated in client database
 
 ### Security
 
 - All API calls require JWT authentication
-- Tenant isolation enforced at backend level
-- Client admin can only access their own tenant data
-- Super admin can access all tenants
+- Database isolation enforced at backend level
+- Client admin can only access their own database
+- Super admin can access all client metadata (but not client data directly)
+- JWT tokens include `databaseName` for routing
 
 ## Subscription Management
 
@@ -306,7 +285,8 @@ Each client admin's frontend should:
 
 - **Duration:** 3 days
 - **Full Access:** All features available
-- **Shop Limit:** 3 shops (configurable)
+- **Shop Limit:** 10 shops (configurable)
+- **Staff Limit:** 50 staff (configurable)
 - **Auto-Expiry:** Blocks access after 3 days
 
 ### After Demo Expires
@@ -322,13 +302,34 @@ Each client admin's frontend should:
 - **Premium:** Advanced features
 - **Enterprise:** Full features + custom limits
 
+## Database Isolation
+
+### Platform Database (`platform_db`)
+- Stores platform super admin users
+- Stores client admin metadata (subscription, limits, etc.)
+- Maps client IDs to database names
+- **NO client business data stored here**
+
+### Client Databases (`client_*_db`)
+- Each client has a completely separate database
+- All client data stored here:
+  - Shops
+  - Users (admin, staff, customers)
+  - Services
+  - Bookings
+  - Slots
+  - Invoices
+  - Settings
+- **Complete isolation** - no cross-database access possible
+- **No `tenantId` fields** needed (database provides isolation)
+
 ## Best Practices
 
-1. **Tenant Creation:**
+1. **Client Admin Creation:**
    - Use professional email addresses
    - Set strong passwords (min 6 chars)
    - Provide complete information
-   - Set appropriate maxShops limit
+   - Set appropriate maxShops and maxStaff limits
 
 2. **Password Management:**
    - Use strong, unique passwords
@@ -343,26 +344,32 @@ Each client admin's frontend should:
    - Extend expiry appropriately
 
 4. **Multi-Domain:**
-   - Each tenant uses same API
+   - Each client uses same API
    - Frontend can be customized per domain
    - Data isolation maintained automatically
    - Super admin manages all from one place
 
+5. **Database Management:**
+   - Databases are created automatically
+   - No manual database creation needed
+   - Each client database is independent
+   - Backup strategies should account for multiple databases
+
 ## Error Handling
 
-### Tenant Already Exists
+### Client Admin Already Exists
 ```json
 {
   "success": false,
-  "error": "Tenant with this email already exists"
+  "error": "Client admin with this email already exists"
 }
 ```
 
-### User Already Exists
+### Database Creation Failed
 ```json
 {
   "success": false,
-  "error": "User with this email already exists"
+  "error": "Failed to create client database"
 }
 ```
 
@@ -370,19 +377,27 @@ Each client admin's frontend should:
 ```json
 {
   "success": false,
-  "error": "Tenant name, email, and phone are required"
+  "error": "Email, phone, adminPassword, adminFirstName, and adminLastName are required"
+}
+```
+
+### Subscription Expired
+```json
+{
+  "success": false,
+  "error": "Subscription has expired. Please contact support."
 }
 ```
 
 ## Summary
 
-1. **Super Admin** creates tenant with client admin credentials
+1. **Super Admin** creates client admin → **System automatically creates database**
 2. **Client Admin** receives credentials and logs in
-3. **Client Admin** deploys frontend on their own domain
-4. **Super Admin** views all tenants, shops, and expiry dates
-5. **Client Admin** pays subscription
-6. **Super Admin** records payment and extends expiry
-7. **System** automatically manages subscription status
+3. **JWT token** includes `databaseName` for automatic routing
+4. **Client Admin** deploys frontend on their own domain
+5. **Super Admin** views all client admins, shops (via queries), and expiry dates
+6. **Client Admin** pays subscription
+7. **Super Admin** records payment and extends expiry
+8. **System** automatically manages subscription status
 
-All tenant data is isolated, and each client admin can have their own domain while using the same backend API.
-
+All client data is completely isolated in separate databases, and each client admin can have their own domain while using the same backend API.

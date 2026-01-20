@@ -6,9 +6,9 @@ The subscription system allows super admins to manage tenant subscriptions manua
 
 ## Super Admin Features
 
-### 1. View All Tenants
+### 1. View All Client Admins
 
-Get a list of all tenants with their shop counts and subscription status:
+Get a list of all client admins with their shop counts and subscription status:
 
 ```bash
 GET /api/super-admin/tenants
@@ -27,8 +27,11 @@ GET /api/super-admin/tenants
   "tenants": [
     {
       "_id": "...",
-      "name": "ABC Salon",
+      "clientId": "64fa2c9e...",
+      "databaseName": "client_64fa2c9e_db",
       "email": "admin@abcsalon.com",
+      "firstName": "John",
+      "lastName": "Doe",
       "shopCount": 3,
       "totalShops": 3,
       "isSubscriptionActive": true,
@@ -46,28 +49,30 @@ GET /api/super-admin/tenants
 }
 ```
 
-### 2. View Tenant Details
+**Note:** Shop counts are fetched by querying each client's database.
 
-Get detailed information about a specific tenant:
+### 2. View Client Admin Details
+
+Get detailed information about a specific client admin:
 
 ```bash
-GET /api/super-admin/tenants/:tenantId
+GET /api/super-admin/tenants/:clientId
 ```
 
 **Response includes:**
-- Tenant information
-- Active and total shop counts
+- Client admin information (stored in `platform_db`)
+- Active and total shop counts (queried from client database)
 - Subscription status
 - Days until expiry
 - Admin user details
-- Recent payment history
+- Recent payment history (stored in `platform_db`)
 
 ### 3. Record Subscription Payment
 
-When a tenant makes a payment, record it to extend their subscription:
+When a client admin makes a payment, record it to extend their subscription:
 
 ```bash
-POST /api/super-admin/tenants/:tenantId/payments
+POST /api/super-admin/tenants/:clientId/payments
 ```
 
 **Request Body:**
@@ -116,7 +121,7 @@ POST /api/super-admin/tenants/:tenantId/payments
 Update subscription expiry date directly (for adjustments):
 
 ```bash
-PUT /api/super-admin/tenants/:tenantId/subscription
+PUT /api/super-admin/tenants/:clientId/subscription
 ```
 
 **Request Body:**
@@ -130,10 +135,10 @@ PUT /api/super-admin/tenants/:tenantId/subscription
 
 ### 5. View Payment History
 
-Get payment history for a tenant:
+Get payment history for a client admin:
 
 ```bash
-GET /api/super-admin/tenants/:tenantId/payments
+GET /api/super-admin/tenants/:clientId/payments
 ```
 
 **Query Parameters:**
@@ -166,13 +171,13 @@ GET /api/super-admin/dashboard
 
 ## Workflow Example
 
-### Scenario: Tenant pays monthly subscription
+### Scenario: Client Admin pays monthly subscription
 
-1. **Tenant contacts you** saying they've paid $99.99 via bank transfer
+1. **Client Admin contacts you** saying they've paid $99.99 via bank transfer
 2. **Verify payment** in your bank account
 3. **Record the payment:**
    ```bash
-   POST /api/super-admin/tenants/TENANT_ID/payments
+   POST /api/super-admin/tenants/CLIENT_ID/payments
    {
      "amount": 99.99,
      "paymentMethod": "bank_transfer",
@@ -182,13 +187,13 @@ GET /api/super-admin/dashboard
    }
    ```
 4. **System automatically:**
-   - Extends subscription expiry by 1 month
-   - Records payment in history
-   - Tenant can continue using the system
+   - Extends subscription expiry by 1 month (updates `platform_db`)
+   - Records payment in history (stored in `platform_db`)
+   - Client admin can continue using the system
 
 ### Scenario: Multiple months payment
 
-If tenant pays for 3 months:
+If client admin pays for 3 months:
 
 ```json
 {
@@ -204,13 +209,18 @@ System extends expiry by 3 months from current expiry date.
 
 The system automatically checks subscription status:
 
-- **Active Subscription**: Tenant can use all features
-- **Expired Subscription**: Tenant operations are blocked
+- **Active Subscription**: Client admin can use all features (accesses their client database)
+- **Expired Subscription**: Client admin operations are blocked
 - **Expiring Soon**: Cron job logs warnings (7 days before expiry)
 
 ### Middleware Protection
 
-All client admin routes are protected by subscription validation middleware. If subscription is expired, operations will be blocked with an error message.
+All client admin routes are protected by subscription validation middleware. The middleware:
+1. Checks subscription status in `platform_db` (client admin metadata)
+2. If subscription is expired, blocks operations with an error message
+3. If active, allows access to client database
+
+**Note:** Subscription data is stored in `platform_db`, but validation occurs before accessing client databases.
 
 ## Cron Jobs
 
@@ -228,7 +238,9 @@ Logs warnings for super admin to follow up.
 2. **Use receipt numbers** for tracking
 3. **Add notes** for any special circumstances
 4. **Check dashboard regularly** for expiring subscriptions
-5. **Follow up** with tenants before expiry
+5. **Follow up** with client admins before expiry
+
+**Note:** All subscription and payment data is stored in `platform_db`, completely separate from client business data in client databases.
 
 ## Payment Receipt Number Format
 
@@ -250,18 +262,20 @@ Plan can be updated when recording payment or manually.
 
 ## Troubleshooting
 
-### Tenant says they paid but subscription expired
+### Client Admin says they paid but subscription expired
 
-1. Check payment history: `GET /api/super-admin/tenants/:tenantId/payments`
+1. Check payment history: `GET /api/super-admin/tenants/:clientId/payments`
 2. If payment not recorded, record it now
 3. If payment was recorded, check expiry date
 4. Manually extend if needed
+
+**Note:** Payment history is stored in `platform_db`, separate from client business data.
 
 ### Need to extend subscription without payment
 
 Use manual update endpoint:
 ```bash
-PUT /api/super-admin/tenants/:tenantId/subscription
+PUT /api/super-admin/tenants/:clientId/subscription
 {
   "subscriptionExpiresAt": "2024-12-31",
   "notes": "Promotional extension"
