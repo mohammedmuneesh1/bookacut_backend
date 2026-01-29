@@ -229,6 +229,36 @@ router.get(
   clientAdminController.getShopInvoices.bind(clientAdminController)
 );
 
+// Invoice Payment Management
+router.post(
+  '/shops/:shopId/invoices/:invoiceId/payments',
+  validateShopAccess,
+  [
+    body('amount').isFloat({ min: 0.01 }),
+    body('paymentMethod').isIn(['cash', 'card', 'upi', 'online', 'other']),
+    body('paymentReference').optional().trim(),
+    body('notes').optional().trim(),
+    validate,
+  ],
+  clientAdminController.addPayment.bind(clientAdminController)
+);
+
+router.post(
+  '/shops/:shopId/invoices/:invoiceId/paid',
+  validateShopAccess,
+  [
+    body('paymentMethod').isIn(['cash', 'card', 'upi', 'online', 'other']),
+    validate,
+  ],
+  clientAdminController.markInvoicePaid.bind(clientAdminController)
+);
+
+router.get(
+  '/shops/:shopId/invoices/:invoiceId/payments',
+  validateShopAccess,
+  clientAdminController.getInvoicePayments.bind(clientAdminController)
+);
+
 // Commission Reports
 router.get(
   '/shops/:shopId/commissions',
@@ -240,6 +270,19 @@ router.get(
   '/shops/:shopId/staff/:staffId/commissions',
   validateShopAccess,
   clientAdminController.getStaffCommissionReport.bind(clientAdminController)
+);
+
+// Payment Reports
+router.get(
+  '/shops/:shopId/payment-reports',
+  validateShopAccess,
+  clientAdminController.getPaymentMethodReport.bind(clientAdminController)
+);
+
+router.get(
+  '/shops/:shopId/payment-reports/daily',
+  validateShopAccess,
+  clientAdminController.getDailyPaymentReport.bind(clientAdminController)
 );
 
 // Staff Commission Rate Management

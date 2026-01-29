@@ -239,23 +239,84 @@ class StaffController {
   }
 
   /**
-   * Mark Invoice as Paid
+   * Add Payment to Invoice (Supports Partial Payments)
+   */
+  async addPayment(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const { amount, paymentMethod, paymentReference, notes } = req.body;
+      const tenantId = req.tenantId;
+      const paidBy = req.user._id;
+
+      if (!amount || amount <= 0) {
+        throw new Error('Payment amount is required and must be greater than 0');
+      }
+
+      if (!paymentMethod) {
+        throw new Error('Payment method is required');
+      }
+
+      const result = await invoiceService.addPayment(tenantId, shopId, invoiceId, {
+        amount,
+        paymentMethod,
+        paymentReference,
+        notes,
+        paidBy,
+      });
+
+      res.json({
+        success: true,
+        payment: result.payment,
+        invoice: result.invoice,
+        message: result.invoice.status === 'paid' 
+          ? 'Invoice fully paid successfully' 
+          : 'Partial payment added successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Mark Invoice as Paid (Full Payment - Backward Compatibility)
    */
   async markInvoicePaid(req, res, next) {
     try {
       const { shopId, invoiceId } = req.params;
       const { paymentMethod } = req.body;
       const tenantId = req.tenantId;
+      const paidBy = req.user._id;
 
       if (!paymentMethod) {
         throw new Error('Payment method is required');
       }
 
-      const invoice = await invoiceService.markPaid(tenantId, shopId, invoiceId, paymentMethod);
+      const result = await invoiceService.markPaid(tenantId, shopId, invoiceId, paymentMethod);
 
       res.json({
         success: true,
-        invoice,
+        payment: result.payment,
+        invoice: result.invoice,
+        message: 'Invoice marked as paid successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Invoice Payment History
+   */
+  async getInvoicePayments(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const tenantId = req.tenantId;
+
+      const result = await invoiceService.getInvoicePayments(tenantId, shopId, invoiceId);
+
+      res.json({
+        success: true,
+        ...result,
       });
     } catch (error) {
       next(error);

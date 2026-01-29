@@ -8,6 +8,7 @@ const serviceCategorySchema = require('../client/models/ServiceCategory').schema
 const shopSettingsSchema = require('../client/models/ShopSettings').schema;
 const bookingSchema = require('../client/models/Booking').schema;
 const invoiceSchema = require('../client/models/Invoice').schema;
+const paymentSchema = require('../client/models/Payment').schema;
 const slotService = require('../services/slotService');
 const slotBlockingService = require('../services/slotBlockingService');
 const invoiceService = require('../services/invoiceService');
@@ -964,6 +965,151 @@ class ClientAdminController {
       res.json({
         success: true,
         invoices,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Add Payment to Invoice (Supports Partial Payments)
+   */
+  async addPayment(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const { amount, paymentMethod, paymentReference, notes } = req.body;
+      const tenantId = req.tenantId;
+      const paidBy = req.user._id;
+
+      if (!amount || amount <= 0) {
+        throw new ValidationError('Payment amount is required and must be greater than 0');
+      }
+
+      if (!paymentMethod) {
+        throw new ValidationError('Payment method is required');
+      }
+
+      const validPaymentMethods = ['cash', 'card', 'upi', 'online', 'other'];
+      if (!validPaymentMethods.includes(paymentMethod)) {
+        throw new ValidationError(`Payment method must be one of: ${validPaymentMethods.join(', ')}`);
+      }
+
+      const result = await invoiceService.addPayment(tenantId, shopId, invoiceId, {
+        amount,
+        paymentMethod,
+        paymentReference,
+        notes,
+        paidBy,
+      });
+
+      res.json({
+        success: true,
+        payment: result.payment,
+        invoice: result.invoice,
+        message: result.invoice.status === 'paid' 
+          ? 'Invoice fully paid successfully' 
+          : 'Partial payment added successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Mark Invoice as Paid (Full Payment - Backward Compatibility)
+   */
+  async markInvoicePaid(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const { paymentMethod } = req.body;
+      const tenantId = req.tenantId;
+      const paidBy = req.user._id;
+
+      if (!paymentMethod) {
+        throw new ValidationError('Payment method is required');
+      }
+
+      const validPaymentMethods = ['cash', 'card', 'upi', 'online', 'other'];
+      if (!validPaymentMethods.includes(paymentMethod)) {
+        throw new ValidationError(`Payment method must be one of: ${validPaymentMethods.join(', ')}`);
+      }
+
+      const result = await invoiceService.markPaid(tenantId, shopId, invoiceId, paymentMethod);
+
+      res.json({
+        success: true,
+        payment: result.payment,
+        invoice: result.invoice,
+        message: 'Invoice marked as paid successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Invoice Payment History
+   */
+  async getInvoicePayments(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const tenantId = req.tenantId;
+
+      const result = await invoiceService.getInvoicePayments(tenantId, shopId, invoiceId);
+
+      res.json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Payment Method Report
+   */
+  async getPaymentMethodReport(req, res, next) {
+    try {
+      const { shopId } = req.params;
+      const { startDate, endDate } = req.query;
+      const tenantId = req.tenantId;
+
+      const report = await invoiceService.getPaymentMethodReport(
+        tenantId,
+        shopId,
+        startDate,
+        endDate
+      );
+
+      res.json({
+        success: true,
+        report,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Daily Payment Report
+   */
+  async getDailyPaymentReport(req, res, next) {
+    try {
+      const { shopId } = req.params;
+      const { startDate, endDate } = req.query;
+      const tenantId = req.tenantId;
+
+      const report = await invoiceService.getDailyPaymentReport(
+        tenantId,
+        shopId,
+        startDate,
+        endDate
+      );
+
+      res.json({
+        success: true,
+        report,
       });
     } catch (error) {
       next(error);

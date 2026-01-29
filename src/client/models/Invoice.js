@@ -74,16 +74,30 @@ const invoiceSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'paid', 'cancelled'],
+      enum: ['pending', 'partial', 'paid', 'cancelled', 'overpaid'],
       default: 'pending',
       index: true,
+    },
+    totalPaidAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    remainingBalance: {
+      type: Number,
+      min: 0,
     },
     paidAt: {
       type: Date,
     },
+    fullyPaidAt: {
+      type: Date,
+    },
     paymentMethod: {
       type: String,
-      enum: ['cash', 'card', 'online', 'other'],
+      enum: ['cash', 'card', 'upi', 'online', 'other'],
+      index: true,
+      // Deprecated: Use Payment model for multiple payment methods
     },
     notes: {
       type: String,
@@ -109,6 +123,8 @@ invoiceSchema.index({ shopId: 1, createdAt: -1 });
 invoiceSchema.index({ customerId: 1 });
 invoiceSchema.index({ shopId: 1, staffId: 1 });
 invoiceSchema.index({ shopId: 1, staffId: 1, status: 1 });
+invoiceSchema.index({ shopId: 1, paymentMethod: 1 });
+invoiceSchema.index({ shopId: 1, paymentMethod: 1, status: 1 });
 
 module.exports = {
   schema: invoiceSchema,

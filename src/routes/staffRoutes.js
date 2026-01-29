@@ -84,14 +84,34 @@ router.post(
   staffController.generateInvoice.bind(staffController)
 );
 
+// Invoice Payment Management
+router.post(
+  '/shops/:shopId/invoices/:invoiceId/payments',
+  validateShopAccess,
+  [
+    body('amount').isFloat({ min: 0.01 }),
+    body('paymentMethod').isIn(['cash', 'card', 'upi', 'online', 'other']),
+    body('paymentReference').optional().trim(),
+    body('notes').optional().trim(),
+    validate,
+  ],
+  staffController.addPayment.bind(staffController)
+);
+
 router.post(
   '/shops/:shopId/invoices/:invoiceId/paid',
   validateShopAccess,
   [
-    body('paymentMethod').isIn(['cash', 'card', 'online', 'other']),
+    body('paymentMethod').isIn(['cash', 'card', 'upi', 'online', 'other']),
     validate,
   ],
   staffController.markInvoicePaid.bind(staffController)
+);
+
+router.get(
+  '/shops/:shopId/invoices/:invoiceId/payments',
+  validateShopAccess,
+  staffController.getInvoicePayments.bind(staffController)
 );
 
 module.exports = router;

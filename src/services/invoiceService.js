@@ -1,4 +1,5 @@
 const Invoice = require('../models/Invoice');
+const Payment = require('../models/Payment');
 const Booking = require('../models/Booking');
 const ShopSettings = require('../models/ShopSettings');
 const StaffProfile = require('../models/StaffProfile');
@@ -88,6 +89,8 @@ class InvoiceService {
         totalAmount,
         commissionAmount,
         commissionRate,
+        totalPaidAmount: 0,
+        remainingBalance: amount + tax,
         status: INVOICE_STATUS.PENDING,
       });
 
@@ -98,7 +101,94 @@ class InvoiceService {
   }
 
   /**
-   * Mark invoice as paid
+   * Add payment to invoice (supports partial payments)
+   */
+  async addPayment(tenantId, shopId, invoiceId, paymentData) {
+    try {
+      const { amount, paymentMethod, paymentReference, notes, paidBy } = paymentData;
+
+      if (!amount || amount <= 0) {
+        throw new Error('Payment amount must be greater than 0');
+      }
+
+      if (!paymentMethod) {
+        throw new Error('Payment method is required');
+      }
+
+      // Get invoice
+      const invoice = await Invoice.findOne({
+        _id: invoiceId,
+        tenantId,
+        shopId,
+      });
+
+      if (!invoice) {
+        throw new Error('Invoice not found');
+      }
+
+      if (invoice.status === 'cancelled') {
+        throw new Error('Cannot add payment to cancelled invoice');
+      }
+
+      // Check if payment amount exceeds remaining balance
+      const remainingBalance = invoice.remainingBalance || invoice.totalAmount - (invoice.totalPaidAmount || 0);
+      
+      if (amount > remainingBalance) {
+        throw new Error(`Payment amount (${amount}) exceeds remaining balance (${remainingBalance})`);
+      }
+
+      // Create payment record
+      const payment = await Payment.create({
+        tenantId,
+        shopId,
+        invoiceId,
+        bookingId: invoice.bookingId,
+        amount,
+        paymentMethod,
+        paymentReference,
+        notes,
+        paidBy,
+      });
+
+      // Update invoice
+      const newTotalPaid = (invoice.totalPaidAmount || 0) + amount;
+      const newRemainingBalance = invoice.totalAmount - newTotalPaid;
+
+      invoice.totalPaidAmount = newTotalPaid;
+      invoice.remainingBalance = newRemainingBalance;
+
+      // Update status based on payment
+      if (newRemainingBalance <= 0) {
+        invoice.status = INVOICE_STATUS.PAID;
+        invoice.fullyPaidAt = new Date();
+        if (!invoice.paidAt) {
+          invoice.paidAt = new Date();
+        }
+      } else {
+        invoice.status = 'partial';
+        if (!invoice.paidAt) {
+          invoice.paidAt = new Date();
+        }
+      }
+
+      // Keep paymentMethod for backward compatibility (use first payment method)
+      if (!invoice.paymentMethod) {
+        invoice.paymentMethod = paymentMethod;
+      }
+
+      await invoice.save();
+
+      return {
+        payment,
+        invoice,
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Mark invoice as paid (full payment - backward compatibility)
    */
   async markPaid(tenantId, shopId, invoiceId, paymentMethod) {
     try {
@@ -112,13 +202,52 @@ class InvoiceService {
         throw new Error('Invoice not found');
       }
 
-      invoice.status = INVOICE_STATUS.PAID;
-      invoice.paidAt = new Date();
-      invoice.paymentMethod = paymentMethod;
+      // Calculate remaining balance
+      const remainingBalance = invoice.remainingBalance || invoice.totalAmount - (invoice.totalPaidAmount || 0);
 
-      await invoice.save();
+      // Add full payment
+      return await this.addPayment(tenantId, shopId, invoiceId, {
+        amount: remainingBalance,
+        paymentMethod,
+      });
+    } catch (error) {
+      throw error;
+    }
+  }
 
-      return invoice;
+  /**
+   * Get payment history for an invoice
+   */
+  async getInvoicePayments(tenantId, shopId, invoiceId) {
+    try {
+      const invoice = await Invoice.findOne({
+        _id: invoiceId,
+        tenantId,
+        shopId,
+      });
+
+      if (!invoice) {
+        throw new Error('Invoice not found');
+      }
+
+      const payments = await Payment.find({
+        tenantId,
+        shopId,
+        invoiceId,
+      })
+        .populate('paidBy', 'firstName lastName email')
+        .sort({ createdAt: -1 });
+
+      return {
+        invoice,
+        payments,
+        summary: {
+          totalAmount: invoice.totalAmount,
+          totalPaid: invoice.totalPaidAmount || 0,
+          remainingBalance: invoice.remainingBalance || invoice.totalAmount - (invoice.totalPaidAmount || 0),
+          paymentCount: payments.length,
+        },
+      };
     } catch (error) {
       throw error;
     }
@@ -151,6 +280,34 @@ class InvoiceService {
         .populate('staffId', 'employeeId')
         .populate('bookingId', 'scheduledAt')
         .sort({ createdAt: -1 });
+
+      // Get payment counts for each invoice
+      const invoiceIds = invoices.map(inv => inv._id);
+      const paymentCounts = await Payment.aggregate([
+        {
+          $match: {
+            tenantId: tenantId,
+            shopId: shopId,
+            invoiceId: { $in: invoiceIds },
+          },
+        },
+        {
+          $group: {
+            _id: '$invoiceId',
+            paymentCount: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const paymentCountMap = {};
+      paymentCounts.forEach(pc => {
+        paymentCountMap[pc._id.toString()] = pc.paymentCount;
+      });
+
+      // Add payment count to each invoice
+      invoices.forEach(invoice => {
+        invoice.paymentCount = paymentCountMap[invoice._id.toString()] || 0;
+      });
 
       return invoices;
     } catch (error) {
@@ -309,6 +466,198 @@ class InvoiceService {
           averageCommission: totalServices > 0 ? totalCommission / totalServices : 0,
         },
         staffCommissions: staffList,
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Get payment method report for a shop
+   */
+  async getPaymentMethodReport(tenantId, shopId, startDate, endDate) {
+    try {
+      // Get all payments in the date range
+      const paymentQuery = {
+        tenantId,
+        shopId,
+      };
+
+      if (startDate && endDate) {
+        paymentQuery.createdAt = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate),
+        };
+      }
+
+      const payments = await Payment.find(paymentQuery).sort({ createdAt: -1 });
+
+      // Group by payment method
+      const paymentMethodStats = {
+        cash: { count: 0, totalAmount: 0, payments: [] },
+        card: { count: 0, totalAmount: 0, payments: [] },
+        upi: { count: 0, totalAmount: 0, payments: [] },
+        online: { count: 0, totalAmount: 0, payments: [] },
+        other: { count: 0, totalAmount: 0, payments: [] },
+      };
+
+      payments.forEach((payment) => {
+        const method = payment.paymentMethod || 'other';
+        if (paymentMethodStats[method]) {
+          paymentMethodStats[method].count += 1;
+          paymentMethodStats[method].totalAmount += payment.amount;
+          paymentMethodStats[method].payments.push({
+            paymentId: payment._id,
+            amount: payment.amount,
+            invoiceId: payment.invoiceId,
+            createdAt: payment.createdAt,
+            paymentReference: payment.paymentReference,
+          });
+        }
+      });
+
+      // Calculate totals
+      const totalPayments = payments.length;
+      const totalAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+
+      // Convert to array format for easier consumption
+      const paymentMethods = Object.keys(paymentMethodStats).map((method) => ({
+        method,
+        count: paymentMethodStats[method].count,
+        totalAmount: paymentMethodStats[method].totalAmount,
+        percentage: totalAmount > 0 ? (paymentMethodStats[method].totalAmount / totalAmount) * 100 : 0,
+        payments: paymentMethodStats[method].payments,
+      }));
+
+      return {
+        period: {
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+        },
+        summary: {
+          totalPayments,
+          totalAmount,
+          paymentMethods,
+        },
+        details: paymentMethodStats,
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Get daily payment report for a shop
+   */
+  async getDailyPaymentReport(tenantId, shopId, startDate, endDate) {
+    try {
+      const paymentQuery = {
+        tenantId,
+        shopId,
+      };
+
+      if (startDate && endDate) {
+        paymentQuery.createdAt = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate),
+        };
+      }
+
+      const payments = await Payment.find(paymentQuery).sort({ createdAt: -1 });
+
+      // Get invoice details for payments
+      const invoiceIds = [...new Set(payments.map(p => {
+        if (typeof p.invoiceId === 'object' && p.invoiceId._id) {
+          return p.invoiceId._id;
+        }
+        return p.invoiceId;
+      }).filter(Boolean))];
+      
+      const invoices = await Invoice.find({
+        _id: { $in: invoiceIds },
+        tenantId,
+        shopId,
+      })
+        .populate('customerId', 'firstName lastName')
+        .populate('serviceId', 'name')
+        .populate('staffId', 'employeeId');
+
+      const invoiceMap = {};
+      invoices.forEach(inv => {
+        invoiceMap[inv._id.toString()] = inv;
+      });
+
+      // Group by date and payment method
+      const dailyStats = {};
+
+      payments.forEach((payment) => {
+        const dateKey = payment.createdAt.toISOString().split('T')[0]; // YYYY-MM-DD
+        const method = payment.paymentMethod || 'other';
+        const invoiceIdStr = typeof payment.invoiceId === 'object' && payment.invoiceId._id 
+          ? payment.invoiceId._id.toString() 
+          : payment.invoiceId.toString();
+        const invoice = invoiceMap[invoiceIdStr];
+
+        if (!dailyStats[dateKey]) {
+          dailyStats[dateKey] = {
+            date: dateKey,
+            totalPayments: 0,
+            totalAmount: 0,
+            paymentMethods: {
+              cash: { count: 0, amount: 0 },
+              card: { count: 0, amount: 0 },
+              upi: { count: 0, amount: 0 },
+              online: { count: 0, amount: 0 },
+              other: { count: 0, amount: 0 },
+            },
+            payments: [],
+          };
+        }
+
+        dailyStats[dateKey].totalPayments += 1;
+        dailyStats[dateKey].totalAmount += payment.amount;
+
+        if (dailyStats[dateKey].paymentMethods[method]) {
+          dailyStats[dateKey].paymentMethods[method].count += 1;
+          dailyStats[dateKey].paymentMethods[method].amount += payment.amount;
+        }
+
+        dailyStats[dateKey].payments.push({
+          paymentId: payment._id,
+          amount: payment.amount,
+          paymentMethod: payment.paymentMethod,
+          paymentReference: payment.paymentReference,
+          createdAt: payment.createdAt,
+          invoice: invoice ? {
+            invoiceNumber: invoice.invoiceNumber,
+            totalAmount: invoice.totalAmount,
+            customer: invoice.customerId ? {
+              name: `${invoice.customerId.firstName} ${invoice.customerId.lastName}`,
+              id: invoice.customerId._id,
+            } : null,
+            service: invoice.serviceId ? {
+              name: invoice.serviceId.name,
+              id: invoice.serviceId._id,
+            } : null,
+            staff: invoice.staffId ? {
+              employeeId: invoice.staffId.employeeId,
+              id: invoice.staffId._id,
+            } : null,
+          } : null,
+        });
+      });
+
+      // Convert to array and sort by date
+      const dailyReports = Object.values(dailyStats).sort((a, b) => 
+        new Date(b.date) - new Date(a.date)
+      );
+
+      return {
+        period: {
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+        },
+        dailyReports,
       };
     } catch (error) {
       throw error;
