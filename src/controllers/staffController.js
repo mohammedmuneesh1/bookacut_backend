@@ -1,8 +1,12 @@
 const Booking = require('../models/Booking');
 const StaffProfile = require('../models/StaffProfile');
+const Shop = require('../models/Shop');
 const bookingService = require('../services/bookingService');
 const invoiceService = require('../services/invoiceService');
+const invoicePrinterService = require('../services/invoicePrinterService');
+const emailService = require('../services/emailService');
 const { NotFoundError } = require('../utils/errors');
+const fs = require('fs');
 
 /**
  * Staff Controller
@@ -317,6 +321,164 @@ class StaffController {
       res.json({
         success: true,
         ...result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Download Invoice PDF
+   */
+  async downloadInvoicePDF(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const tenantId = req.tenantId;
+
+      // Get invoice with populated data
+      const invoice = await invoiceService.getInvoiceForPrinting(tenantId, shopId, invoiceId);
+      
+      // Get shop data
+      const shop = await Shop.findOne({ _id: shopId, tenantId });
+      if (!shop) {
+        throw new NotFoundError('Shop');
+      }
+
+      // Generate PDF
+      const pdfPath = await invoicePrinterService.generatePDF(invoice, shop);
+
+      // Send PDF as download
+      res.download(pdfPath, `Invoice_${invoice.invoiceNumber}.pdf`, (err) => {
+        if (err) {
+          console.error('Error sending PDF:', err);
+        }
+        // Clean up file after sending (optional, or use cleanup job)
+        // fs.unlinkSync(pdfPath);
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Print Invoice
+   */
+  async printInvoice(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const { printerType, printerName, printerIP, port, deviceAddress } = req.body;
+      const tenantId = req.tenantId;
+
+      if (!printerType || !['usb', 'network', 'bluetooth'].includes(printerType.toLowerCase())) {
+        throw new Error('Invalid printer type. Must be: usb, network, or bluetooth');
+      }
+
+      // Get invoice with populated data
+      const invoice = await invoiceService.getInvoiceForPrinting(tenantId, shopId, invoiceId);
+      
+      // Get shop data
+      const shop = await Shop.findOne({ _id: shopId, tenantId });
+      if (!shop) {
+        throw new NotFoundError('Shop');
+      }
+
+      // Generate PDF
+      const pdfPath = await invoicePrinterService.generatePDF(invoice, shop);
+
+      let printResult;
+
+      // Print based on type
+      switch (printerType.toLowerCase()) {
+        case 'usb':
+          printResult = await invoicePrinterService.printToUSB(pdfPath, printerName);
+          break;
+        case 'network':
+          if (!printerIP) {
+            throw new Error('Printer IP address is required for network printing');
+          }
+          printResult = await invoicePrinterService.printToNetwork(pdfPath, printerIP, port, printerName);
+          break;
+        case 'bluetooth':
+          if (!deviceAddress) {
+            throw new Error('Bluetooth device address is required for Bluetooth printing');
+          }
+          printResult = await invoicePrinterService.printToBluetooth(pdfPath, deviceAddress, printerName);
+          break;
+        default:
+          throw new Error('Invalid printer type');
+      }
+
+      res.json({
+        success: true,
+        message: 'Invoice sent to printer successfully',
+        ...printResult,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Send Invoice via Email
+   */
+  async sendInvoiceEmail(req, res, next) {
+    try {
+      const { shopId, invoiceId } = req.params;
+      const { email } = req.body; // Optional: override customer email
+      const tenantId = req.tenantId;
+
+      // Get invoice with populated data
+      const invoice = await invoiceService.getInvoiceForPrinting(tenantId, shopId, invoiceId);
+      
+      // Get shop data
+      const shop = await Shop.findOne({ _id: shopId, tenantId });
+      if (!shop) {
+        throw new NotFoundError('Shop');
+      }
+
+      // Determine recipient email
+      const recipientEmail = email || invoice.customerId?.email;
+      if (!recipientEmail) {
+        throw new Error('Customer email address is required');
+      }
+
+      const customerName = invoice.customerId 
+        ? `${invoice.customerId.firstName} ${invoice.customerId.lastName}`
+        : 'Customer';
+
+      // Generate PDF
+      const pdfPath = await invoicePrinterService.generatePDF(invoice, shop);
+
+      // Send email
+      const emailResult = await emailService.sendInvoiceEmail({
+        to: recipientEmail,
+        customerName,
+        invoiceNumber: invoice.invoiceNumber,
+        pdfPath,
+        invoiceData: invoice,
+        shopData: shop,
+      });
+
+      res.json({
+        success: true,
+        message: 'Invoice email sent successfully',
+        ...emailResult,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Available Printers
+   */
+  async getAvailablePrinters(req, res, next) {
+    try {
+      const printers = await invoicePrinterService.getAvailablePrinters();
+
+      res.json({
+        success: true,
+        printers,
       });
     } catch (error) {
       next(error);

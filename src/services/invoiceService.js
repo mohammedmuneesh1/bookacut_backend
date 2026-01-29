@@ -547,6 +547,31 @@ class InvoiceService {
   }
 
   /**
+   * Get invoice with all populated data for printing/emailing
+   */
+  async getInvoiceForPrinting(tenantId, shopId, invoiceId) {
+    try {
+      const invoice = await Invoice.findOne({
+        _id: invoiceId,
+        tenantId,
+        shopId,
+      })
+        .populate('customerId', 'firstName lastName email phone')
+        .populate('serviceId', 'name description duration')
+        .populate('staffId', 'employeeId')
+        .populate('bookingId', 'scheduledAt status');
+
+      if (!invoice) {
+        throw new Error('Invoice not found');
+      }
+
+      return invoice;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
    * Get daily payment report for a shop
    */
   async getDailyPaymentReport(tenantId, shopId, startDate, endDate) {

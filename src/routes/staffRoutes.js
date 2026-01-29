@@ -114,5 +114,41 @@ router.get(
   staffController.getInvoicePayments.bind(staffController)
 );
 
+// Invoice Printing & Download
+router.get(
+  '/shops/:shopId/invoices/:invoiceId/download',
+  validateShopAccess,
+  staffController.downloadInvoicePDF.bind(staffController)
+);
+
+router.post(
+  '/shops/:shopId/invoices/:invoiceId/print',
+  validateShopAccess,
+  [
+    body('printerType').isIn(['usb', 'network', 'bluetooth']),
+    body('printerName').optional().trim(),
+    body('printerIP').optional().isIP(),
+    body('port').optional().isInt({ min: 1, max: 65535 }),
+    body('deviceAddress').optional().trim(),
+    validate,
+  ],
+  staffController.printInvoice.bind(staffController)
+);
+
+router.post(
+  '/shops/:shopId/invoices/:invoiceId/send-email',
+  validateShopAccess,
+  [
+    body('email').optional().isEmail(),
+    validate,
+  ],
+  staffController.sendInvoiceEmail.bind(staffController)
+);
+
+router.get(
+  '/printers',
+  staffController.getAvailablePrinters.bind(staffController)
+);
+
 module.exports = router;
 
